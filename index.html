@@ -103,6 +103,7 @@
   .section-head span{font-size:16px;color:var(--muted);font-weight:500}
 
   .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(272px,1fr))}
+  .grid--lead{margin-bottom:14px}
 
   .card{
     background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
@@ -154,16 +155,18 @@
   <section class="contents">
     <div class="wrap">
       <div class="section-head">
-        <span>План и пошаговые инструкции по этапам</span>
+        <span>План и пошаговые инструкции по этапам:</span>
       </div>
 
-      <div class="grid">
+      <div class="grid grid--lead">
         <a class="card card--plan" href="https://github.com/refgen72off/migr_MSSQL_Postgres/blob/main/%D0%9F%D0%BB%D0%B0%D0%BD.md" target="_blank" rel="noopener">
           <span class="card__num">ПЛАН</span>
           <h3 class="card__title">План миграции, v0.2</h3>
           <p class="card__desc">Границы pgloader, стратегия переноса и дельты, 12 этапов, риски, откат</p>
         </a>
+      </div>
 
+      <div class="grid">
         <a class="card" href="https://github.com/refgen72off/migr_MSSQL_Postgres/blob/main/docs/13.1-%D0%B8%D0%BD%D0%B2%D0%B5%D0%BD%D1%82%D0%B0%D1%80%D0%B8%D0%B7%D0%B0%D1%86%D0%B8%D1%8F.md" target="_blank" rel="noopener">
           <span class="card__num">13.1</span>
           <h3 class="card__title">Инвентаризация источника</h3>
