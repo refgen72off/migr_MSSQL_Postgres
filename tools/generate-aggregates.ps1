@@ -5,7 +5,18 @@
 .DESCRIPTION
     Читает каталог колонок БД и печатает SQL, который для каждой пользовательской таблицы
     возвращает набор метрик: cnt, count.<колонка>, nulls.<колонка>, а для числовых колонок —
-    sum/min/max, для дат — min/max.
+    sum/min/max, для дат — min/max в epoch-секундах.
+
+    Особенности:
+    - базовый тип колонки резолвится через system_type_id: пользовательские alias-типы
+      (например MyMoney на базе money) корректно попадают в числовые/датские списки;
+    - numeric/decimal шире 32 разрядов пропускаются для sum (сумма переполнит
+      decimal(38,6), TRY_SUM на 2016–2019 нет) — такие колонки перечисляются в конце;
+    - даты снимаются epoch-секундами (DATEDIFF_BIG от 1970-01-01, см. 13.3 §5 и 13.10 §4.2):
+      строковые представления MSSQL и PostgreSQL не сравнимы;
+    - time не имеет даты: min/max как строки, только для чтения человеком, не для diff;
+    - datetimeoffset конвертируется к datetime2 — смещение теряется и проверяется отдельно;
+    - NULL (пустая таблица) выводится как строка 'NULL'.
 
     Сгенерированный SQL — шаблон: просмотрите его перед запуском и убедитесь, что набор метрик
     соответствует разделу 5 инструкции. Для баз с сотнями таблиц запускайте по схемам (-Schema).
@@ -42,11 +53,11 @@ else {
 }
 
 $metaQuery = @"
-SELECT s.name AS sch, t.name AS tab, c.name AS col, ty.name AS typ
+SELECT s.name AS sch, t.name AS tab, c.name AS col, st.name AS typ, c.precision AS prec
 FROM sys.tables  t
 JOIN sys.schemas s ON s.schema_id = t.schema_id
 JOIN sys.columns c ON c.object_id = t.object_id
-JOIN sys.types  ty ON ty.user_type_id = c.user_type_id
+JOIN sys.types  st ON st.user_type_id = c.system_type_id
 WHERE t.is_ms_shipped = 0 $schemaFilter
 ORDER BY s.name, t.name, c.column_id;
 "@
@@ -54,16 +65,20 @@ ORDER BY s.name, t.name, c.column_id;
 $meta = Invoke-Sqlcmd -ServerInstance $Server -Database $Database -Query $metaQuery
 if (-not $meta) { throw "Не найдено ни одной пользовательской таблицы ($Server / $Database)." }
 
-$numericTypes = @('int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'money', 'smallmoney')
-$dateTypes = @('date', 'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset', 'time')
+$numericTypes   = @('int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'money', 'smallmoney')
+$epochDateTypes = @('date', 'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset')
 
+# Экранирование ] внутри идентификатора: [a]b] -> [a]]b]
+function Quote-Name([string]$n) { return '[' + $n.Replace(']', ']]') + ']' }
+
+$wideColumns = New-Object System.Collections.Generic.List[string]
 $tableBlocks = New-Object System.Collections.Generic.List[string]
 
 foreach ($table in ($meta | Group-Object sch, tab)) {
 
     $schName = $table.Group[0].sch
     $tabName = $table.Group[0].tab
-    $target = '[' + $schName + '].[' + $tabName + ']'
+    $target = (Quote-Name $schName) + '.' + (Quote-Name $tabName)
     $label = "N'" + ($schName + '.' + $tabName).Replace("'", "''") + "'"
 
     $metrics = New-Object System.Collections.Generic.List[string]
@@ -71,26 +86,38 @@ foreach ($table in ($meta | Group-Object sch, tab)) {
 
     foreach ($column in $table.Group) {
 
-        $colRef = '[' + $column.col + ']'
+        $colRef  = Quote-Name $column.col
         $colName = $column.col.Replace("'", "''")
 
         $mCount = "N'count." + $colName + "'"
         $mNulls = "N'nulls." + $colName + "'"
-        $mSum = "N'sum." + $colName + "'"
-        $mMin = "N'min." + $colName + "'"
-        $mMax = "N'max." + $colName + "'"
+        $mSum   = "N'sum."   + $colName + "'"
+        $mMin   = "N'min."   + $colName + "'"
+        $mMax   = "N'max."   + $colName + "'"
 
         $metrics.Add("SELECT $label AS object_name, $mCount AS metric, CAST(COUNT($colRef) AS nvarchar(64)) AS value FROM $target")
         $metrics.Add("SELECT $label, $mNulls, CAST(COUNT_BIG(*) - COUNT($colRef) AS nvarchar(64)) FROM $target")
 
         if ($numericTypes -contains $column.typ) {
-            $metrics.Add("SELECT $label, $mSum, CAST(SUM(CAST($colRef AS decimal(38,6))) AS nvarchar(64)) FROM $target")
-            $metrics.Add("SELECT $label, $mMin, CAST(MIN($colRef) AS nvarchar(64)) FROM $target")
-            $metrics.Add("SELECT $label, $mMax, CAST(MAX($colRef) AS nvarchar(64)) FROM $target")
+            # numeric/decimal шире 32 разрядов: сумма переполнит decimal(38,6), TRY_SUM на 2016-2019 нет
+            if (($column.typ -in @('decimal','numeric')) -and ([int]$column.prec -gt 32)) {
+                $wideColumns.Add(("$schName.$tabName.$($column.col) ($($column.typ)($($column.prec)))"))
+            }
+            else {
+                $metrics.Add("SELECT $label, $mSum, COALESCE(CAST(SUM(CAST($colRef AS decimal(38,6))) AS nvarchar(64)), N'NULL') FROM $target")
+            }
+            $metrics.Add("SELECT $label, $mMin, COALESCE(CAST(MIN($colRef) AS nvarchar(64)), N'NULL') FROM $target")
+            $metrics.Add("SELECT $label, $mMax, COALESCE(CAST(MAX($colRef) AS nvarchar(64)), N'NULL') FROM $target")
         }
-        elseif ($dateTypes -contains $column.typ) {
-            $metrics.Add("SELECT $label, $mMin, CAST(MIN($colRef) AS nvarchar(64)) FROM $target")
-            $metrics.Add("SELECT $label, $mMax, CAST(MAX($colRef) AS nvarchar(64)) FROM $target")
+        elseif ($epochDateTypes -contains $column.typ) {
+            # даты — только epoch-секунды: строковые форматы MSSQL и PostgreSQL не сравнимы
+            $metrics.Add("SELECT $label, $mMin, COALESCE(CAST(DATEDIFF_BIG(SECOND, CAST('19700101' AS datetime2), MIN($colRef)) AS nvarchar(20)), N'NULL') FROM $target")
+            $metrics.Add("SELECT $label, $mMax, COALESCE(CAST(DATEDIFF_BIG(SECOND, CAST('19700101' AS datetime2), MAX($colRef)) AS nvarchar(20)), N'NULL') FROM $target")
+        }
+        elseif ($column.typ -eq 'time') {
+            # time не имеет даты: min/max как строки — только для чтения человеком, не для diff
+            $metrics.Add("SELECT $label, $mMin, COALESCE(CAST(MIN($colRef) AS nvarchar(64)), N'NULL') FROM $target")
+            $metrics.Add("SELECT $label, $mMax, COALESCE(CAST(MAX($colRef) AS nvarchar(64)), N'NULL') FROM $target")
         }
         # строки, binary, uniqueidentifier, float: только count/nulls — содержимое сверяется хешами
     }
@@ -109,3 +136,8 @@ $tableCount = $tableBlocks.Count
 $metricCount = ([regex]::Matches($script, 'UNION ALL')).Count + 1
 
 Write-Host ("Таблиц: {0}; метрик: {1}; файл: {2}" -f $tableCount, $metricCount, $OutFile)
+
+if ($wideColumns.Count -gt 0) {
+    Write-Warning ("Без sum (numeric шире 32 разрядов, переполнит decimal(38,6)): {0}" -f ($wideColumns -join '; '))
+    Write-Warning "Сверяйте эти колонки хешами выгрузок или полным сравнением (13.3, раздел 7)."
+}
