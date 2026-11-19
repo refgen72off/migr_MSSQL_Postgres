@@ -23,11 +23,11 @@
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\generate-aggregates.ps1 `
-      -Server srv01 -Database MyDb -OutFile C:\work\migr\MyDb\snapshot\T0\31-aggregates.sql
+      -Server srv01 -Database MyDb -OutFile <каталог-миграции>\MyDb\snapshot\T0\31-aggregates.sql
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\generate-aggregates.ps1 `
-      -Server srv01 -Database MyDb -Schema dbo -OutFile C:\work\migr\MyDb\snapshot\T0\31-aggregates-dbo.sql
+      -Server srv01 -Database MyDb -Schema dbo -OutFile <каталог-миграции>\MyDb\snapshot\T0\31-aggregates-dbo.sql
 
 .NOTES
     Требуется модуль SqlServer (Invoke-Sqlcmd). Учётная запись — только чтение:
