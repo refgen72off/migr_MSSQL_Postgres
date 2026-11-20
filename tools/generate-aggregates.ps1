@@ -38,7 +38,12 @@ param(
     [Parameter(Mandatory = $true)][string]$Server,
     [Parameter(Mandatory = $true)][string]$Database,
     [Parameter(Mandatory = $true)][string]$OutFile,
-    [string]$Schema
+    [string]$Schema,
+    # SQL-аутентификация (без параметров — Windows-аутентификация, как раньше).
+    # Пароль лучше не указывать в командной строке: он читается из env MSSQL_PASSWORD,
+    # если -Password опущен.
+    [string]$Username,
+    [string]$Password
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,6 +57,11 @@ else {
     $schemaFilter = ''
 }
 
+if ($Username -and -not $Password) {
+    $Password = $env:MSSQL_PASSWORD
+    if (-not $Password) { throw "Указан -Username, но пароль не задан (-Password или env MSSQL_PASSWORD)." }
+}
+
 $metaQuery = @"
 SELECT s.name AS sch, t.name AS tab, c.name AS col, st.name AS typ, c.precision AS prec
 FROM sys.tables  t
@@ -62,7 +72,12 @@ WHERE t.is_ms_shipped = 0 $schemaFilter
 ORDER BY s.name, t.name, c.column_id;
 "@
 
-$meta = Invoke-Sqlcmd -ServerInstance $Server -Database $Database -Query $metaQuery
+$sqlArgs = @{ ServerInstance = $Server; Database = $Database; Query = $metaQuery }
+if ($Username) {
+    $secure = ConvertTo-SecureString $Password -AsPlainText -Force
+    $sqlArgs.Credential = New-Object System.Management.Automation.PSCredential($Username, $secure)
+}
+$meta = Invoke-Sqlcmd @sqlArgs
 if (-not $meta) { throw "Не найдено ни одной пользовательской таблицы ($Server / $Database)." }
 
 $numericTypes   = @('int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'money', 'smallmoney')
