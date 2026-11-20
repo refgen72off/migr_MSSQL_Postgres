@@ -1,0 +1,45 @@
+-- ONEC_MIMIC -> Tantor 18: основной загрузочный файл pgloader (этап 13.7).
+-- Грузит все таблицы, КРОМЕ вынесенных в отдельные файлы крупных:
+--   onec-mimic-accumrg1.load (dbo._AccumRg1, 4,3 млн строк),
+--   onec-mimic-files.load     (dbo._Files, ~2 ГБ LOB).
+--
+-- Все значения в {{скобках}} — переменные окружения (см. README.md), секретов и имён
+-- хостов в файле нет.
+--
+-- Решения по типам и идентификаторам — docs/13.4 (compatibility.md, cast-rules.txt):
+--   datetime2 -> timestamp без зоны; rowversion (timestamp каталога) -> bytea с дропом
+--   колонок на этапе 13.9; numeric/nvarchar с keep typemod; downcase identifiers.
+
+LOAD DATABASE
+     FROM mssql://{{MSSQL_USER}}:{{MSSQL_PWD}}@{{MSSQL_HOST}}:1433/{{MSSQL_DB}}
+     INTO postgresql://{{PG_USER}}:{{PG_PWD}}@{{PG_HOST}}:5432/{{PG_DB}}
+
+ WITH include no drop,            -- ничего не удалять в приёмнике
+      create tables,               -- таблицы создаёт pgloader (режим A, 13.7 §1)
+      create indexes,              -- индексы строятся после копирования данных
+      no foreign keys,             -- FK в базе нет (13.4 §7)
+      create no schemas,           -- public и gen созданы на этапе 13.5
+      reset no sequences,          -- identity донастраивается вручную (13.9)
+      downcase identifiers,        -- решение 13.4 §3
+      truncate,                    -- повторный прогон чистит только свои таблицы
+      workers = 4, concurrency = 1,
+      prefetch rows = 10000, batch rows = 5000, batch size = 10MB,
+      max parallel create index = 1,
+      on error stop
+
+ SET work_mem to '64MB',
+     maintenance_work_mem to '512MB',
+     statement_timeout to '0'
+
+ CAST type nvarchar  to varchar keep typemod,   -- nvarchar(max) -> varchar без длины (= text)
+      type varchar   to varchar keep typemod,
+      type numeric   to numeric keep typemod,
+      type decimal   to numeric keep typemod,
+      type datetime  to timestamp drop typemod,
+      type datetime2 to timestamp drop typemod,
+      type timestamp to bytea drop typemod      -- rowversion: переносится как bytea,
+                                                -- колонки дропаются на этапе 13.9
+
+ ALTER SCHEMA 'dbo' RENAME TO 'public'
+
+ EXCLUDING TABLE NAMES LIKE '_AccumRg1', '_Files' IN SCHEMA 'dbo';
