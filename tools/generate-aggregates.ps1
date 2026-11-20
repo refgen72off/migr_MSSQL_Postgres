@@ -43,7 +43,10 @@ param(
     # Пароль лучше не указывать в командной строке: он читается из env MSSQL_PASSWORD,
     # если -Password опущен.
     [string]$Username,
-    [string]$Password
+    [string]$Password,
+    # самоподписанный сертификат источника (контейнеры, стенды): без этого Invoke-Sqlcmd
+    # падает на «цепочка сертификатов...» (требует модуль SqlServer 21.1+, где есть ключ)
+    [switch]$TrustServerCertificate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +80,7 @@ if ($Username) {
     $secure = ConvertTo-SecureString $Password -AsPlainText -Force
     $sqlArgs.Credential = New-Object System.Management.Automation.PSCredential($Username, $secure)
 }
+if ($TrustServerCertificate) { $sqlArgs.TrustServerCertificate = $true }
 $meta = Invoke-Sqlcmd @sqlArgs
 if (-not $meta) { throw "Не найдено ни одной пользовательской таблицы ($Server / $Database)." }
 
