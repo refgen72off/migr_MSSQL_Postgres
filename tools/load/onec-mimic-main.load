@@ -14,14 +14,17 @@ LOAD DATABASE
      FROM mssql://{{MSSQL_USER}}:{{MSSQL_PWD}}@{{MSSQL_HOST}}:1433/{{MSSQL_DB}}
      INTO postgresql://{{PG_USER}}:{{PG_PWD}}@{{PG_HOST}}:5432/{{PG_DB}}
 
- WITH include no drop,            -- ничего не удалять в приёмнике
+ WITH include drop,               -- ОТСТУПЛЕНИЕ от 13.7 §1: в pgloader 3.6.10 создание индексов/PK
+                                   -- требует drop-indexes, а оно требует include drop (reindex для
+                                   -- MSSQL появился позже). Приёмник выделен под миграцию (13.5),
+                                   -- все объекты migr_etl - include drop здесь безопасен: дропаются
+                                   -- только таблицы своего фильтра. Повторный прогон = drop + recreate.
       create tables,               -- таблицы создаёт pgloader (режим A, 13.7 §1)
       create indexes,              -- индексы строятся после копирования данных
       no foreign keys,             -- FK в базе нет (13.4 §7)
       create no schemas,           -- public и gen созданы на этапе 13.5
       reset no sequences,          -- identity донастраивается вручную (13.9)
       downcase identifiers,        -- решение 13.4 §3
-      truncate,                    -- повторный прогон чистит только свои таблицы
       workers = 4, concurrency = 1,
       prefetch rows = 10000, batch rows = 5000, batch size = 10MB,
       max parallel create index = 1,

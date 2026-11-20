@@ -7,12 +7,25 @@
 
 | Порядок | Файл | Что грузит | Объём |
 |---|---|---|---|
-| 1 | `onec-mimic-main.load` | все таблицы, кроме вынесенных | 76 таблиц, ~7,4 млн строк |
-| 2 | `onec-mimic-accumrg1.load` | `dbo._AccumRg1` | 4 268 000 строк |
-| 3 | `onec-mimic-files.load` | `dbo._Files` | 4 050 строк, ~2 ГБ LOB |
+| 1 | `onec-mimic-gen.load` | схема `gen` целиком | 27 таблиц, ~1,4 млн строк |
+| 2 | `onec-mimic-main.load` | все таблицы `dbo`, кроме вынесенных | 49 таблиц, ~5,9 млн строк |
+| 3 | `onec-mimic-accumrg1.load` | `dbo._AccumRg1` | 4 268 000 строк |
+| 4 | `onec-mimic-files.load` | `dbo._Files` | 4 050 строк, ~2 ГБ LOB |
 
 Порядок: сначала мелкие таблицы (быстро видны ошибки типов), затем крупные, затем LOB
 (13.7 §3).
+
+**Почему gen в отдельном файле:** баг pgloader — клауза `EXCLUDING ... IN SCHEMA 'dbo'`
+в main.load молча выбрасывает таблицы всех схем, кроме dbo (WHERE строится конъюнкцией
+`schema='dbo' AND name NOT LIKE ...`, для прочих схем условие ложно). См. комментарий
+в `onec-mimic-gen.load`.
+
+**Почему include drop (отступление от 13.7 §1):** в pgloader 3.6.10 опция `create indexes`
+работает только вместе с `include drop` (внутри pgloader `create-indexes` требует
+`drop-indexes`, а тот — `include drop`; `reindex` для MSSQL появился позже 3.6.10).
+Приёмник `onec_mimic` выделен под миграцию и принадлежит `migr_etl` — `include drop`
+безопасен: каждый файл дропает только таблицы своего фильтра. Повторный прогон =
+drop + recreate (truncate не нужен).
 
 ## Переменные окружения
 
@@ -52,6 +65,7 @@ pgloader --verbose --summary main.summary.csv \
 
 ## Повторный прогон
 
-`truncate` + `include no drop`: повторный запуск перезаливает таблицы целиком (pgloader
-не умеет догрузку изменений; «догон» — только `MATERIALIZE VIEWS` по времени, 13.7 §4).
-Схемы `public`/`gen` должны существовать до прогона (`create no schemas` в файлах).
+Каждый файл с `include drop` дропает только свои таблицы и создаёт заново — повторный
+запуск полностью идемпотентен (pgloader не умеет догрузку изменений; «догон» — только
+`MATERIALIZE VIEWS` по времени, 13.7 §4). Схемы `public`/`gen` должны существовать до
+прогона (`create no schemas` в файлах).
